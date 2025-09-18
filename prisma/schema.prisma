@@ -1,0 +1,73 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+model User {
+  id           Int     @id @default(autoincrement())
+  name         String
+  email        String  @unique
+  passwordHash String
+
+  // Relationships
+  createdPolls Poll[] // One user can create many polls
+  votes        Vote[] // One user can have many votes
+
+  @@map("users")
+}
+
+model Poll {
+  id           Int       @id @default(autoincrement())
+  question     String
+  isPublished  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Foreign key
+  creatorId Int
+
+  // Relationships
+  creator  User   @relation(fields: [creatorId], references: [id])
+  options  PollOption[]  // One poll can have many options
+  votes    Vote[]
+
+  @@map("polls")
+}
+
+model PollOption {
+  id           Int       @id @default(autoincrement())
+  text         String
+
+  // Foreign key
+  pollId Int
+
+  // Relationships
+  poll   Poll   @relation(fields: [pollId], references: [id])
+  votes  Vote[]  // One option can have many votes
+
+  @@map("poll_options")
+}
+
+model Vote {
+  id           Int       @id @default(autoincrement())
+
+  // Foreign keys
+  userId         Int
+  pollId         Int
+  pollOptionId   Int
+
+  // Relationships
+  user           User          @relation(fields: [userId], references: [id])
+  poll           Poll          @relation(fields: [pollId], references: [id])
+  pollOption     PollOption    @relation(fields: [pollOptionId], references: [id])
+
+  // Prevent duplicate votes from same user on same option
+  @@unique([userId, pollId])
+  @@map("votes")
+}
+
