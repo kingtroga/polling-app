@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Polling App Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Real-Time Polling Test</h1>
+    
+    <!-- Auth Section -->
+    <div id="auth">
+        <h3>Register/Login</h3>
+        <input type="text" id="name" placeholder="Name">
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="register()">Register</button>
+        <button onclick="login()">Login</button>
+    </div>
+    
+    <!-- Poll Section -->
+    <div id="polls" style="display:none;">
+        <h3>Create Poll</h3>
+        <input type="text" id="question" placeholder="Poll question">
+        <input type="text" id="options" placeholder="Options (comma separated)">
+        <button onclick="createPoll()">Create Poll</button>
+        
+        <h3>Current Polls</h3>
+        <div id="pollsList"></div>
+    </div>
+    
+    <div id="results"></div>
+
+    <script>
+        let token = null;
+        let socket = null;
+        
+        async function register() {
+            const response = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: document.getElementById('name').value,
+                    email: document.getElementById('email').value,
+                    password: document.getElementById('password').value
+                })
+            });
+            
+            const data = await response.json();
+            if (data.token) {
+                token = data.token;
+                document.getElementById('auth').style.display = 'none';
+                document.getElementById('polls').style.display = 'block';
+                connectSocket();
+                loadPolls();
+            }
+        }
+        
+        async function login() {
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: document.getElementById('email').value,
+                    password: document.getElementById('password').value
+                })
+            });
+            
+            const data = await response.json();
+            if (data.token) {
+                token = data.token;
+                document.getElementById('auth').style.display = 'none';
+                document.getElementById('polls').style.display = 'block';
+                connectSocket();
+                loadPolls();
+            }
+        }
+        
+        function connectSocket() {
+            socket = io();
+            socket.on('poll-update', (updatedPoll) => {
+                console.log('Poll updated:', updatedPoll);
+                displayPollResults(updatedPoll);
+            });
+        }
+        
+        async function createPoll() {
+            const question = document.getElementById('question').value;
+            const optionsText = document.getElementById('options').value;
+            
+            if (!question || !optionsText) {
+                alert('Please fill in both question and options');
+                return;
+            }
+            
+            const options = optionsText.split(',').map(s => s.trim());
+            
+            console.log('Creating poll:', { question, options });
+            
+            try {
+                const response = await fetch('/api/polls', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        question: question,
+                        options: options
+                    })
+                });
+                
+                const result = await response.json();
+                console.log('Poll creation response:', result);
+                
+                if (response.ok) {
+                    alert('Poll created successfully!');
+                    document.getElementById('question').value = '';
+                    document.getElementById('options').value = '';
+                    loadPolls();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error creating poll:', error);
+                alert('Failed to create poll');
+            }
+        }
+        
+        async function loadPolls() {
+            const response = await fetch('/api/polls');
+            const polls = await response.json();
+            
+            const pollsList = document.getElementById('pollsList');
+            pollsList.innerHTML = polls.map(poll => `
+                <div>
+                    <h4>${poll.question}</h4>
+                    ${poll.options.map(option => `
+                        <button onclick="vote(${option.id}, ${poll.id})">${option.text}</button>
+                    `).join('')}
+                    <button onclick="joinPoll(${poll.id})">Join Live Updates</button>
+                </div>
+            `).join('');
+        }
+        
+        async function vote(optionId, pollId) {
+            const response = await fetch('/api/votes', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ pollOptionId: optionId })
+            });
+            
+            const result = await response.json();
+            console.log('Vote result:', result);
+        }
+        
+        function joinPoll(pollId) {
+            socket.emit('join-poll', pollId);
+        }
+        
+        function displayPollResults(poll) {
+            const results = document.getElementById('results');
+            results.innerHTML = `
+                <h3>Live Results: ${poll.question}</h3>
+                ${poll.options.map(option => `
+                    <div>${option.text}: ${option._count.votes} votes</div>
+                `).join('')}
+            `;
+        }
+    </script>
+</body>
+</html>
