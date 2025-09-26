@@ -11,7 +11,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const { pollOptionId } = req.body
     const userId = req.user.userId
     
-    // Get the poll option to find the poll ID
+    // Get the poll option
     const pollOption = await prisma.pollOption.findUnique({
       where: { id: pollOptionId },
       include: { poll: true }
@@ -25,34 +25,42 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Cannot vote on unpublished poll' })
     }
     
-    // Check if user already voted on this poll
-    const existingVote = await prisma.vote.findUnique({
+    // Find existing vote using findFirst
+    const existingVote = await prisma.vote.findFirst({
       where: { 
-        userId_pollId: { 
-          userId: userId, 
-          pollId: pollOption.pollId 
-        } 
+        userId: userId,
+        pollId: pollOption.pollId
       }
     })
+    
+    let vote;
     
     if (existingVote) {
-      return res.status(400).json({ error: 'You have already voted on this poll' })
+      // Update existing vote
+      vote = await prisma.vote.update({
+        where: { id: existingVote.id },
+        data: { pollOptionId: pollOptionId },
+        include: {
+          pollOption: true,
+          user: { select: { id: true, name: true } }
+        }
+      })
+    } else {
+      // Create new vote
+      vote = await prisma.vote.create({
+        data: {
+          userId: userId,
+          pollId: pollOption.pollId,
+          pollOptionId: pollOptionId
+        },
+        include: {
+          pollOption: true,
+          user: { select: { id: true, name: true } }
+        }
+      })
     }
     
-    // Create the vote
-    const vote = await prisma.vote.create({
-      data: {
-        userId: userId,
-        pollId: pollOption.pollId,
-        pollOptionId: pollOptionId
-      },
-      include: {
-        pollOption: true,
-        user: { select: { id: true, name: true } }
-      }
-    })
-    
-    // Get updated poll results for real-time broadcast
+    // Get updated poll results
     const updatedPoll = await prisma.poll.findUnique({
       where: { id: pollOption.pollId },
       include: {
@@ -64,16 +72,93 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     })
     
+    // Broadcast real-time update
     const io = req.app.get('io')
-io.to(`poll-${pollOption.pollId}`).emit('poll-update', updatedPoll)
+    io.to(`poll-${pollOption.pollId}`).emit('poll-update', updatedPoll)
+    
     res.json(vote)
     
   } catch (error) {
-    if (error.code === 'P2002') {
-      res.status(400).json({ error: 'You have already voted on this poll' })
-    } else {
-      res.status(500).json({ error: 'Failed to submit vote' })
+    console.error('Vote error:', error)
+    res.status(500).json({ error: 'Failed to submit vote' })
+  }
+})
+
+// Submit a vote (protected)
+router.put('/', authenticateToken, async (req, res) => {
+  try {
+    const { pollOptionId } = req.body
+    const userId = req.user.userId
+    
+    // Get the poll option
+    const pollOption = await prisma.pollOption.findUnique({
+      where: { id: pollOptionId },
+      include: { poll: true }
+    })
+    
+    if (!pollOption) {
+      return res.status(404).json({ error: 'Poll option not found' })
     }
+    
+    if (!pollOption.poll.isPublished) {
+      return res.status(400).json({ error: 'Cannot vote on unpublished poll' })
+    }
+    
+    // Find existing vote
+    const existingVote = await prisma.vote.findFirst({
+      where: { 
+        userId: userId,
+        pollId: pollOption.pollId
+      }
+    })
+    
+    let vote;
+    
+    if (existingVote) {
+      // Update existing vote
+      vote = await prisma.vote.update({
+        where: { id: existingVote.id },
+        data: { pollOptionId: pollOptionId },
+        include: {
+          pollOption: true,
+          user: { select: { id: true, name: true } }
+        }
+      })
+    } else {
+      // Create new vote
+      vote = await prisma.vote.create({
+        data: {
+          userId: userId,
+          pollId: pollOption.pollId,
+          pollOptionId: pollOptionId
+        },
+        include: {
+          pollOption: true,
+          user: { select: { id: true, name: true } }
+        }
+      })
+    }
+    
+    // Get updated poll results
+    const updatedPoll = await prisma.poll.findUnique({
+      where: { id: pollOption.pollId },
+      include: {
+        options: {
+          include: {
+            _count: { select: { votes: true } }
+          }
+        }
+      }
+    })
+    
+    // Broadcast real-time update
+    const io = req.app.get('io')
+    io.to(`poll-${pollOption.pollId}`).emit('poll-update', updatedPoll)
+    
+    res.json(vote)
+    
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update vote' })
   }
 })
 

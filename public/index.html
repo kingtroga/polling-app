@@ -3,6 +3,16 @@
 <head>
     <title>Polling App Test</title>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .poll-container { border: 1px solid #ddd; margin: 20px 0; padding: 15px; border-radius: 5px; }
+        .option-button { margin: 5px; padding: 10px; cursor: pointer; }
+        .voted { background-color: #4CAF50; color: white; }
+        .vote-count { font-weight: bold; color: #666; }
+        .results { margin-top: 20px; padding: 15px; background-color: #f0f0f0; border-radius: 5px; }
+        input { margin: 5px; padding: 8px; width: 200px; }
+        button { margin: 5px; padding: 8px 15px; cursor: pointer; }
+    </style>
 </head>
 <body>
     <h1>Real-Time Polling Test</h1>
@@ -19,6 +29,7 @@
     
     <!-- Poll Section -->
     <div id="polls" style="display:none;">
+        <p>Welcome <button onclick="logout()">Logout</button></p>
         <h3>Create Poll</h3>
         <input type="text" id="question" placeholder="Poll question">
         <input type="text" id="options" placeholder="Options (comma separated)">
@@ -33,6 +44,9 @@
     <script>
         let token = null;
         let socket = null;
+        let myVotes = {}; 
+        let currentUser = null; 
+        
         
         async function register() {
             const response = await fetch('/api/auth/register', {
@@ -48,10 +62,16 @@
             const data = await response.json();
             if (data.token) {
                 token = data.token;
+                currentUser = data.user;
+                localStorage.setItem('polling_token', token);
+                localStorage.setItem('polling_user', JSON.stringify(currentUser));
                 document.getElementById('auth').style.display = 'none';
                 document.getElementById('polls').style.display = 'block';
                 connectSocket();
                 loadPolls();
+                loadMyVotes();
+            } else {
+                alert('Registration failed: ' + (data.error || 'Unknown error'));
             }
         }
         
@@ -68,19 +88,59 @@
             const data = await response.json();
             if (data.token) {
                 token = data.token;
+                currentUser = data.user;
+                localStorage.setItem('polling_token', token);
+                localStorage.setItem('polling_user', JSON.stringify(currentUser));
                 document.getElementById('auth').style.display = 'none';
                 document.getElementById('polls').style.display = 'block';
                 connectSocket();
                 loadPolls();
+                loadMyVotes();
+            } else {
+                alert('Login failed: ' + (data.error || 'Unknown error'));
             }
+        }
+
+        function logout() {
+            localStorage.removeItem('polling_token');
+            localStorage.removeItem('polling_user');
+            token = null;
+            currentUser = null;
+            myVotes = {};
+            document.getElementById('auth').style.display = 'block';
+            document.getElementById('polls').style.display = 'none';
+            if (socket) socket.disconnect();
         }
         
         function connectSocket() {
             socket = io();
             socket.on('poll-update', (updatedPoll) => {
                 console.log('Poll updated:', updatedPoll);
-                displayPollResults(updatedPoll);
+                updatePollDisplay(updatedPoll);
             });
+        }
+        
+        async function loadMyVotes() {
+            try {
+                const response = await fetch('/api/votes/my-votes', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const votes = await response.json();
+                
+                console.log('Raw votes response:', votes);  // ADD THIS LINE
+                
+                // Store user's votes by poll ID
+                myVotes = {};
+                votes.forEach(vote => {
+                    myVotes[vote.pollOption.poll.id] = vote.pollOptionId;
+                });
+                
+                console.log('Final myVotes object:', myVotes);  // ADD THIS LINE
+                console.log('Current user ID:', currentUser?.id);  // ADD THIS LINE
+                
+            } catch (error) {
+                console.error('Failed to load user votes:', error);
+            }
         }
         
         async function createPoll() {
@@ -93,8 +153,6 @@
             }
             
             const options = optionsText.split(',').map(s => s.trim());
-            
-            console.log('Creating poll:', { question, options });
             
             try {
                 const response = await fetch('/api/polls', {
@@ -110,7 +168,6 @@
                 });
                 
                 const result = await response.json();
-                console.log('Poll creation response:', result);
                 
                 if (response.ok) {
                     alert('Poll created successfully!');
@@ -127,48 +184,187 @@
         }
         
         async function loadPolls() {
-            const response = await fetch('/api/polls');
-            const polls = await response.json();
-            
-            const pollsList = document.getElementById('pollsList');
-            pollsList.innerHTML = polls.map(poll => `
-                <div>
-                    <h4>${poll.question}</h4>
-                    ${poll.options.map(option => `
-                        <button onclick="vote(${option.id}, ${poll.id})">${option.text}</button>
-                    `).join('')}
-                    <button onclick="joinPoll(${poll.id})">Join Live Updates</button>
-                </div>
-            `).join('');
+            try {
+                const response = await fetch('/api/polls');
+                const polls = await response.json();
+                displayPolls(polls);
+            } catch (error) {
+                console.error('Failed to load polls:', error);
+            }
         }
         
-        async function vote(optionId, pollId) {
-            const response = await fetch('/api/votes', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ pollOptionId: optionId })
-            });
+        function displayPolls(polls) {
+            const pollsList = document.getElementById('pollsList');
+            pollsList.innerHTML = polls.map(poll => {
+                const totalVotes = poll.options.reduce((sum, option) => sum + (option._count?.votes || 0), 0);
+                const userVotedOptionId = myVotes[poll.id];
+                const isCreator = currentUser && currentUser.id === poll.creator.id;
+                
+                return `
+                    <div class="poll-container">
+                        <h4>${poll.question}</h4>
+                        <p><strong> Created by: ${poll.creator.name}</p>
+                        <div>
+                            ${poll.options.map(option => {
+                                const voteCount = option._count?.votes || 0;
+                                const percentage = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                                const isVoted = userVotedOptionId === option.id;
+                                
+                                return `
+                                    <button class="option-button ${isVoted ? 'voted' : ''}" 
+                                            onclick="changeVote(${option.id}, ${poll.id})">
+                                        ${option.text} 
+                                        ${isVoted ? ' ✓ YOUR VOTE' : ''}
+                                    </button><br>
+                                `;
+                            }).join('')}
+                        </div>
+                        <button onclick="joinPoll(${poll.id})">Join Live Updates</button>
+                        ${isCreator ? `
+                            <button onclick="editPoll(${poll.id}, '${poll.question.replace(/'/g, "\\'")}')" style="background-color: #2196F3; color: white;">Edit Poll</button>
+                            <button onclick="deletePoll(${poll.id})" style="background-color: #f44336; color: white;">Delete Poll</button>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function updatePollDisplay(updatedPoll) {
+            // Find the poll in the current display and update it
+            loadPolls(); 
             
-            const result = await response.json();
-            console.log('Vote result:', result);
+            // Also show in results section
+            displayPollResults(updatedPoll);
+        }
+        
+        async function changeVote(optionId, pollId) {
+            try {
+                const response = await fetch('/api/votes', {
+                    method: 'PUT',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ pollOptionId: optionId })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Update local vote tracking
+                    myVotes[pollId] = optionId;
+                    alert('Vote updated successfully!');
+                    loadPolls();
+                } else {
+                    alert('Vote failed: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Vote error:', error);
+                alert('Failed to submit vote');
+            }
+        }
+        
+        async function editPoll(pollId, currentQuestion) {
+            const newQuestion = prompt('Edit poll question:', currentQuestion);
+            if (!newQuestion || newQuestion === currentQuestion) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/polls/${pollId}`, {
+                    method: 'PUT',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ question: newQuestion })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('Poll updated successfully!');
+                    loadPolls();
+                } else {
+                    alert('Update failed: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Update error:', error);
+                alert('Failed to update poll');
+            }
+        }
+
+        async function deletePoll(pollId) {
+            if (!confirm('Are you sure you want to delete this poll? This action cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/polls/${pollId}`, {
+                    method: 'DELETE',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('Poll deleted successfully!');
+                    loadPolls(); // Refresh the display
+                } else {
+                    alert('Delete failed: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert('Failed to delete poll');
+            }
         }
         
         function joinPoll(pollId) {
             socket.emit('join-poll', pollId);
+            alert(`Joined live updates for poll ${pollId}. You'll see real-time results below when others vote.`);
         }
         
         function displayPollResults(poll) {
+            const totalVotes = poll.options.reduce((sum, option) => sum + (option._count?.votes || 0), 0);
+            
             const results = document.getElementById('results');
             results.innerHTML = `
-                <h3>Live Results: ${poll.question}</h3>
-                ${poll.options.map(option => `
-                    <div>${option.text}: ${option._count.votes} votes</div>
-                `).join('')}
+                <div class="results">
+                    <h3>🔴 LIVE Results: ${poll.question}</h3>
+                    <p><strong>Total votes: ${totalVotes}</strong></p>
+                    ${poll.options.map(option => {
+                        const voteCount = option._count?.votes || 0;
+                        const percentage = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                        return `
+                            <div style="margin: 10px 0;">
+                                <strong>${option.text}</strong>: ${voteCount} votes (${percentage}%)
+                                <div style="background: #ddd; width: 200px; height: 20px; border-radius: 10px; display: inline-block; margin-left: 10px;">
+                                    <div style="background: #4CAF50; width: ${percentage}%; height: 100%; border-radius: 10px;"></div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
             `;
         }
+
+        // Check for saved session on page load
+        window.addEventListener('load', function() {
+            const savedToken = localStorage.getItem('polling_token');
+            const savedUser = localStorage.getItem('polling_user');
+            
+            if (savedToken && savedUser) {
+                token = savedToken;
+                currentUser = JSON.parse(savedUser);
+                document.getElementById('auth').style.display = 'none';
+                document.getElementById('polls').style.display = 'block';
+                connectSocket();
+                loadPolls();
+                loadMyVotes();
+            }
+        });
     </script>
 </body>
 </html>

@@ -22,52 +22,41 @@ model User {
 }
 
 model Poll {
-  id           Int       @id @default(autoincrement())
-  question     String
-  isPublished  Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id          Int      @id @default(autoincrement())
+  question    String
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  creatorId   Int
 
-  // Foreign key
-  creatorId Int
-
-  // Relationships
-  creator  User   @relation(fields: [creatorId], references: [id])
-  options  PollOption[]  // One poll can have many options
-  votes    Vote[]
+  creator  User         @relation(fields: [creatorId], references: [id])
+  options  PollOption[] 
+  votes    Vote[]       
 
   @@map("polls")
 }
 
 model PollOption {
-  id           Int       @id @default(autoincrement())
-  text         String
-
-  // Foreign key
+  id     Int    @id @default(autoincrement())
+  text   String
   pollId Int
 
-  // Relationships
-  poll   Poll   @relation(fields: [pollId], references: [id])
-  votes  Vote[]  // One option can have many votes
+  poll  Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes Vote[] 
 
   @@map("poll_options")
 }
 
 model Vote {
-  id           Int       @id @default(autoincrement())
+  id           Int @id @default(autoincrement())
+  userId       Int
+  pollId       Int
+  pollOptionId Int
 
-  // Foreign keys
-  userId         Int
-  pollId         Int
-  pollOptionId   Int
+  user       User       @relation(fields: [userId], references: [id])
+  poll       Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  pollOption PollOption @relation(fields: [pollOptionId], references: [id], onDelete: Cascade)
 
-  // Relationships
-  user           User          @relation(fields: [userId], references: [id])
-  poll           Poll          @relation(fields: [pollId], references: [id])
-  pollOption     PollOption    @relation(fields: [pollOptionId], references: [id])
-
-  // Prevent duplicate votes from same user on same option
   @@unique([userId, pollId])
   @@map("votes")
 }
-
